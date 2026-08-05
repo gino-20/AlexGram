@@ -3789,6 +3789,7 @@ void ConnectionsManager::setSystemLangCode(std::string langCode) {
 
 void ConnectionsManager::resumeNetwork(bool partial) {
     scheduleTask([&, partial] {
+        bool reconnectGenericConnection = false;
         if (lastMonotonicPauseTime != 0) {
             int64_t diff = (getCurrentTimeMonotonicMillis() - lastMonotonicPauseTime) / 1000;
             int64_t systemDiff = getCurrentTime() - lastSystemPauseTime;
@@ -3801,6 +3802,7 @@ void ConnectionsManager::resumeNetwork(bool partial) {
                 lastMonotonicPauseTime = lastPauseTime = getCurrentTimeMonotonicMillis();
                 lastSystemPauseTime = getCurrentTime();
                 networkPaused = false;
+                reconnectGenericConnection = true;
                 if (LOGS_ENABLED) DEBUG_D("wakeup network in background account%u", instanceNum);
             } else if (lastPauseTime != 0) {
                 lastMonotonicPauseTime = lastPauseTime = getCurrentTimeMonotonicMillis();
@@ -3817,6 +3819,9 @@ void ConnectionsManager::resumeNetwork(bool partial) {
         }
         if (!networkPaused) {
             for (auto & datacenter : datacenters) {
+                if (reconnectGenericConnection && datacenter.first == currentDatacenterId) {
+                    datacenter.second->getGenericConnection(true, 0);
+                }
                 if (datacenter.second->isHandshaking(false)) {
                     datacenter.second->createGenericConnection()->connect();
                 } else if (datacenter.second->isHandshaking(true)) {
