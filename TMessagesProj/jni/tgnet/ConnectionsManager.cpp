@@ -1774,7 +1774,13 @@ void ConnectionsManager::sendPing(Datacenter *datacenter, bool usePushConnection
     } else {
         connection = datacenter->getGenericConnection(true, 0);
     }
-    if (connection == nullptr || (!usePushConnection && connection->getConnectionToken() == 0)) {
+    if (connection == nullptr) {
+        return;
+    }
+    if (!usePushConnection && connection->getConnectionToken() == 0) {
+        connection->connect();
+        const int32_t pingInterval = testBackend ? 2000 : 19000;
+        lastPingTime = getCurrentTimeMonotonicMillis() - pingInterval + 1000;
         return;
     }
     auto request = new TL_ping_delay_disconnect();
