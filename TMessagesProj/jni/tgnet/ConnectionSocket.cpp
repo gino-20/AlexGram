@@ -150,15 +150,7 @@ class TlsHello {
 public:
 
     TlsHello() {
-        RAND_bytes(grease, MAX_GREASE);
-        for (int a = 0; a < MAX_GREASE; a++) {
-            grease[a] = (uint8_t) ((grease[a] & 0xf0) + 0x0A);
-        }
-        for (size_t i = 1; i < MAX_GREASE; i += 2) {
-            if (grease[i] == grease[i + 1]) {
-                grease[i] ^= 0x10;
-            }
-        }
+        regenerateGrease();
     }
 
     struct Op {
@@ -168,6 +160,7 @@ public:
         Type type;
         size_t length;
         int seed;
+        bool reuse = false;
         std::string data;
         std::vector<std::vector<Op>> entities;
 
@@ -185,10 +178,11 @@ public:
             return res;
         }
 
-        static Op K() {
+        static Op K(bool reuse = false) {
             Op res;
             res.type = Type::K;
             res.length = 32;
+            res.reuse = reuse;
             return res;
         }
 
@@ -376,9 +370,9 @@ public:
                     Op::string("\x00\x12\x00\x00", 4),
                     Op::string("\x00\x33\x04\xea\x04\xe8\x11\xec\x04\xc0", 10),
                     Op::M(),
-                    Op::K(),
+                    Op::K(true),
                     Op::string("\x00\x1d\x00\x20", 4),
-                    Op::K(),
+                    Op::K(true),
                     Op::string("\x00\x2b\x00\x05\x04\x03\x04\x03\x03", 9),
                     Op::string("\x00\x0d\x00\x18\x00\x16\x04\x03\x05\x03\x06\x03\x08\x04\x08\x05\x08\x06\x04\x01\x05\x01\x06\x01\x02\x03\x02\x01", 28),
                     Op::string("\x00\x2d\x00\x02\x01\x01", 6),
@@ -411,6 +405,9 @@ public:
     }
 
     uint32_t writeToBuffer(uint8_t *data) {
+        regenerateGrease();
+        reusablePublicKeyGenerated = false;
+        scopeOffset.clear();
         uint32_t offset = 0;
         for (auto op : ops) {
             writeOp(op, data, offset);
@@ -425,8 +422,22 @@ public:
 private:
     std::vector<Op> ops;
     uint8_t grease[MAX_GREASE];
+    uint8_t reusablePublicKey[32];
+    bool reusablePublicKeyGenerated = false;
     std::vector<size_t> scopeOffset;
     std::string domain;
+
+    void regenerateGrease() {
+        RAND_bytes(grease, MAX_GREASE);
+        for (int a = 0; a < MAX_GREASE; a++) {
+            grease[a] = (uint8_t) ((grease[a] & 0xf0) + 0x0A);
+        }
+        for (size_t i = 1; i + 1 < MAX_GREASE; i += 2) {
+            if (grease[i] == grease[i + 1]) {
+                grease[i] ^= 0x10;
+            }
+        }
+    }
 
     void writeOp(const TlsHello::Op &op, uint8_t *data, uint32_t &offset) {
         using Type = TlsHello::Op::Type;
@@ -440,7 +451,15 @@ private:
                 offset += op.length;
                 break;
             case Type::K:
-                generate_public_key(data + offset);
+                if (op.reuse) {
+                    if (!reusablePublicKeyGenerated) {
+                        generate_public_key(reusablePublicKey);
+                        reusablePublicKeyGenerated = true;
+                    }
+                    memcpy(data + offset, reusablePublicKey, sizeof(reusablePublicKey));
+                } else {
+                    generate_public_key(data + offset);
+                }
                 offset += op.length;
                 break;
             case Type::M:
