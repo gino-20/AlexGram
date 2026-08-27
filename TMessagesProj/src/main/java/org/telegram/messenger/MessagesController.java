@@ -355,7 +355,11 @@ public class MessagesController extends BaseController implements NotificationCe
     public boolean updatingState;
     public boolean firstGettingTask;
     public boolean registeringForPush;
+    private static final long PUSH_REGISTER_REFRESH_INTERVAL = 30 * 60 * 1000L;
     private long lastPushRegisterSendTime;
+    private int pushRegisterRetryCount;
+    private String pushRegisterRetryToken;
+    private Runnable pushRegisterRetryRunnable;
     private boolean resetingDialogs;
     private TLRPC.TL_messages_peerDialogs resetDialogsPinned;
     private TLRPC.messages_Dialogs resetDialogsAll;
@@ -1562,8 +1566,8 @@ public class MessagesController extends BaseController implements NotificationCe
         canRevokePmInbox = mainPreferences.getBoolean("canRevokePmInbox", canRevokePmInbox);
         preloadFeaturedStickers = mainPreferences.getBoolean("preloadFeaturedStickers", false);
         youtubePipType = mainPreferences.getString("youtubePipType", "disabled");
-        keepAliveService = mainPreferences.getBoolean("keepAliveService", false);
-        backgroundConnection = mainPreferences.getBoolean("keepAliveService", false);
+        keepAliveService = mainPreferences.getBoolean("keepAliveService", true);
+        backgroundConnection = mainPreferences.getBoolean("backgroundConnection", true);
         promoDialogId = mainPreferences.getLong("proxy_dialog", 0);
         nextPromoInfoCheckTime = mainPreferences.getInt("nextPromoInfoCheckTime", 0);
         promoDialogType = mainPreferences.getInt("promo_dialog_type", 0);
@@ -15617,11 +15621,23 @@ public class MessagesController extends BaseController implements NotificationCe
         if (TextUtils.isEmpty(regid) || registeringForPush || getUserConfig().getClientUserId() == 0) {
             return;
         }
-        if (getUserConfig().registeredForPush && regid.equals(SharedConfig.pushString)) {
+        long now = SystemClock.elapsedRealtime();
+        if (getUserConfig().registeredForPush
+                && regid.equals(SharedConfig.pushString)
+                && lastPushRegisterSendTime != 0
+                && Math.abs(now - lastPushRegisterSendTime) < PUSH_REGISTER_REFRESH_INTERVAL) {
             return;
         }
+        if (!regid.equals(pushRegisterRetryToken)) {
+            pushRegisterRetryToken = regid;
+            pushRegisterRetryCount = 0;
+            if (pushRegisterRetryRunnable != null) {
+                AndroidUtilities.cancelRunOnUIThread(pushRegisterRetryRunnable);
+                pushRegisterRetryRunnable = null;
+            }
+        }
         registeringForPush = true;
-        lastPushRegisterSendTime = SystemClock.elapsedRealtime();
+        lastPushRegisterSendTime = now;
         if (SharedConfig.pushAuthKey == null) {
             SharedConfig.pushAuthKey = new byte[256];
             Utilities.random.nextBytes(SharedConfig.pushAuthKey);
@@ -15643,16 +15659,33 @@ public class MessagesController extends BaseController implements NotificationCe
             }
         }
         getConnectionsManager().sendRequest(req, (response, error) -> {
-            if (response instanceof TLRPC.TL_boolTrue) {
-                if (BuildVars.LOGS_ENABLED) {
-                    FileLog.d("account " + currentAccount + " registered for push, push type: " + pushType);
+            AndroidUtilities.runOnUIThread(() -> {
+                registeringForPush = false;
+                if (response instanceof TLRPC.TL_boolTrue) {
+                    if (BuildVars.LOGS_ENABLED) {
+                        FileLog.d("account " + currentAccount + " registered for push, push type: " + pushType);
+                    }
+                    pushRegisterRetryCount = 0;
+                    pushRegisterRetryRunnable = null;
+                    getUserConfig().registeredForPush = true;
+                    SharedConfig.pushString = regid;
+                    SharedConfig.pushType = pushType;
+                    SharedConfig.saveConfig();
+                    getUserConfig().saveConfig(false);
+                } else {
+                    FileLog.e("account " + currentAccount + " failed to register for push, push type: " + pushType
+                            + ", error: " + (error == null ? "unexpected response" : error.code + " " + error.text));
+                    if (pushRegisterRetryCount < 5 && regid.equals(pushRegisterRetryToken)) {
+                        long retryDelay = Math.min(5 * 60 * 1000L, 15 * 1000L << pushRegisterRetryCount);
+                        pushRegisterRetryCount++;
+                        pushRegisterRetryRunnable = () -> {
+                            pushRegisterRetryRunnable = null;
+                            registerForPush(pushType, regid);
+                        };
+                        AndroidUtilities.runOnUIThread(pushRegisterRetryRunnable, retryDelay);
+                    }
                 }
-                getUserConfig().registeredForPush = true;
-                SharedConfig.pushString = regid;
-                SharedConfig.pushType = pushType;
-                getUserConfig().saveConfig(false);
-            }
-            AndroidUtilities.runOnUIThread(() -> registeringForPush = false);
+            });
         });
     }
 

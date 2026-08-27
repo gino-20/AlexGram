@@ -234,7 +234,8 @@ void ConnectionsManager::select() {
             lastPushPingTime = now;
             uint8_t offset;
             RAND_bytes(&offset, 1);
-            nextPingTimeOffset = 60000 * 3 + (offset % 40) - 20;
+            int32_t pushPingInterval = proxyAddress.empty() ? 60000 * 3 : 45000;
+            nextPingTimeOffset = pushPingInterval + ((offset % 11) - 5) * 1000;
             if (datacenter != nullptr) {
                 sendPing(datacenter, true);
             }
@@ -1774,7 +1775,13 @@ void ConnectionsManager::sendPing(Datacenter *datacenter, bool usePushConnection
     } else {
         connection = datacenter->getGenericConnection(true, 0);
     }
-    if (connection == nullptr || (!usePushConnection && connection->getConnectionToken() == 0)) {
+    if (connection == nullptr) {
+        return;
+    }
+    if (!usePushConnection && connection->getConnectionToken() == 0) {
+        connection->connect();
+        const int32_t pingInterval = testBackend ? 2000 : 19000;
+        lastPingTime = getCurrentTimeMonotonicMillis() - pingInterval + 1000;
         return;
     }
     auto request = new TL_ping_delay_disconnect();
@@ -3789,6 +3796,7 @@ void ConnectionsManager::setSystemLangCode(std::string langCode) {
 
 void ConnectionsManager::resumeNetwork(bool partial) {
     scheduleTask([&, partial] {
+        bool reconnectGenericConnection = false;
         if (lastMonotonicPauseTime != 0) {
             int64_t diff = (getCurrentTimeMonotonicMillis() - lastMonotonicPauseTime) / 1000;
             int64_t systemDiff = getCurrentTime() - lastSystemPauseTime;
@@ -3801,6 +3809,7 @@ void ConnectionsManager::resumeNetwork(bool partial) {
                 lastMonotonicPauseTime = lastPauseTime = getCurrentTimeMonotonicMillis();
                 lastSystemPauseTime = getCurrentTime();
                 networkPaused = false;
+                reconnectGenericConnection = true;
                 if (LOGS_ENABLED) DEBUG_D("wakeup network in background account%u", instanceNum);
             } else if (lastPauseTime != 0) {
                 lastMonotonicPauseTime = lastPauseTime = getCurrentTimeMonotonicMillis();
@@ -3817,6 +3826,9 @@ void ConnectionsManager::resumeNetwork(bool partial) {
         }
         if (!networkPaused) {
             for (auto & datacenter : datacenters) {
+                if (reconnectGenericConnection && datacenter.first == currentDatacenterId) {
+                    datacenter.second->getGenericConnection(true, 0);
+                }
                 if (datacenter.second->isHandshaking(false)) {
                     datacenter.second->createGenericConnection()->connect();
                 } else if (datacenter.second->isHandshaking(true)) {

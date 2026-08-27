@@ -353,13 +353,18 @@ public class ApplicationLoader extends Application {
         if (preferences.contains("pushService")) {
             enabled = preferences.getBoolean("pushService", true);
         } else {
-            enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", false);
+            enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", true);
         }
         if (enabled) {
             try {
-                applicationContext.startService(new Intent(applicationContext, NotificationsService.class));
-            } catch (Throwable ignore) {
-
+                Intent intent = new Intent(applicationContext, NotificationsService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    applicationContext.startForegroundService(intent);
+                } else {
+                    applicationContext.startService(intent);
+                }
+            } catch (Throwable e) {
+                FileLog.e(e);
             }
         } else {
             applicationContext.stopService(new Intent(applicationContext, NotificationsService.class));
