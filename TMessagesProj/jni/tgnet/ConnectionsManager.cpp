@@ -234,7 +234,8 @@ void ConnectionsManager::select() {
             lastPushPingTime = now;
             uint8_t offset;
             RAND_bytes(&offset, 1);
-            nextPingTimeOffset = 60000 * 3 + (offset % 40) - 20;
+            int32_t pushPingInterval = proxyAddress.empty() ? 60000 * 3 : 45000;
+            nextPingTimeOffset = pushPingInterval + ((offset % 11) - 5) * 1000;
             if (datacenter != nullptr) {
                 sendPing(datacenter, true);
             }

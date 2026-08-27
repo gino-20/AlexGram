@@ -288,7 +288,7 @@ public class ConnectionsManager extends BaseController {
         if (preferences.contains("pushConnection")) {
             return preferences.getBoolean("pushConnection", true);
         } else {
-            return MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("backgroundConnection", false);
+            return MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("backgroundConnection", true);
         }
     }
 
@@ -934,6 +934,9 @@ public class ConnectionsManager extends BaseController {
 
     public static void onInternalPushReceived(final int currentAccount) {
         KeepAliveJob.startJob();
+        ConnectionsManager.getInstance(currentAccount).resumeNetworkMaybe();
+        Utilities.stageQueue.postRunnable(() ->
+                MessagesController.getInstance(currentAccount).getDifference());
     }
 
     public static void setProxySettings(boolean enabled, String address, int port, String username, String password, String secret) {
